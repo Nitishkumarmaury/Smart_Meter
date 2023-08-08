@@ -24,9 +24,8 @@ int currentTime; // Global variable for current minute
 int startHour;
 int startMinute;
 int endHour;
-int endMinute;
+int endMinute,solarStatus;
 const long timeZoneOffset = 5 * 3600 + 30 * 60; // Change this according to your time zone (e.g., GMT+05:30)
-
 const int LED = 13;
 const int pirPin = 27; // PIR sensor pin
 const int switchPin = 4; // Switch pin
@@ -69,7 +68,16 @@ void printCurrentTime(const struct tm &timeinfo)
   Serial.print("Current time: ");
   Serial.println(timeString);
 }
-
+void core1Task(void* parameter) {
+  
+ 
+  while (true) {
+ 
+ readings();
+  oledisplay();
+  //delay(1000);
+  }
+}
 void setup()
 {
   pinMode(LED, OUTPUT);
@@ -87,6 +95,15 @@ void setup()
   readings();
   oledisplay();
   // Connect to Wi-Fi
+   xTaskCreatePinnedToCore(
+    core1Task,      // Task function
+    "Core 1 Task",  // Task name
+    10000,          // Stack size (bytes)
+    NULL,           // Parameter
+    1,              // Priority
+    NULL,           // Task handle
+    1               // Core to run the task on (Core 1)
+  );
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.print("Connecting to Wi-Fi");
   while (WiFi.status() != WL_CONNECTED)
@@ -119,11 +136,9 @@ void setup()
   Firebase.reconnectWiFi(true);
 }
 void loop() {
-  firebase();
   pir();
+  firebase();
   schedule();
-  oledisplay();
-  readings();
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
     return;
@@ -136,13 +151,10 @@ void loop() {
 
 void pir() {
   pirState = digitalRead(pirPin) == HIGH ? 1 : 0;
-
   int switchState = digitalRead(switchPin);
-
   if (switchState == HIGH && !switchPressed) {
     switchOn = !switchOn;
     switchPressed = true;
-
     if (switchOn) {
       switchStatus = 1;
       if (Firebase.RTDB.setInt(&fbdo, "/switches/toggleSwitch3", switchStatus)) {}
@@ -164,7 +176,6 @@ void pir() {
       switchOn = (switchStatus == 1);
     }
   }
-
   if (switchOn && pirState == 1) {
     digitalWrite(ledPin, HIGH);
     ledOn = true;
@@ -179,38 +190,29 @@ void pir() {
     if (Firebase.RTDB.setInt(&fbdo, "/ledStatus1", 0)) {}
     else {}
   }
-
   delay(500);
 }
 void readings() {
   unsigned long currentMillis = millis();
-
   if (currentMillis - previousMillis >= interval) {
     previousMillis = currentMillis;
-
     voltage = generateRandomValue(200, 240);
     voltage = round(voltage * 100) / 100.0; // Limit voltage to two decimal places
-
     current = generateRandomValue(0.5, 5.0);
-
     power = voltage * current / 1000.0;
     power = round(power * 100) / 100.0; // Limit power to two decimal places
-
     energy += power * (interval / 3600000.0);
     energy = round(energy * 100) / 100.0; // Limit energy to two decimal places
   }
 }
-
 void schedule() {
   if (Firebase.RTDB.getString(&fbdo, "/schedule/room1/startTime")) {
     if (fbdo.dataType() == "string") {
       String startTimeStr = fbdo.stringData();
-
       // Extract hours and minutes from start time
       int colonIndex = startTimeStr.indexOf(':');
       String startHourStr = startTimeStr.substring(0, colonIndex);
       String startMinuteStr = startTimeStr.substring(colonIndex + 1);
-
       // Print the start time
       Serial.print("Start Time: ");
       Serial.print(startHourStr.toInt());
@@ -224,7 +226,6 @@ void schedule() {
   else {
     // Failed to read start time from Firebase
   }
-
   if (Firebase.RTDB.getString(&fbdo, "/schedule/room1/endTime")) {
     if (fbdo.dataType() == "string") {
       String endTimeStr = fbdo.stringData();
@@ -233,20 +234,18 @@ void schedule() {
       int colonIndex = endTimeStr.indexOf(':');
       String endHourStr = endTimeStr.substring(0, colonIndex);
       String endMinuteStr = endTimeStr.substring(colonIndex + 1);
-
       // Print the end time
       Serial.print("End Time: ");
       Serial.print(endHourStr.toInt());
       Serial.print(":");
       Serial.println(endMinuteStr.toInt());
-
       endHour = endHourStr.toInt();
       endMinute = endMinuteStr.toInt();
     }
   }
-  else {
-    // Failed to read end time from Firebase
-  }
+  if (Firebase.RTDB.getInt(&fbdo, "/solarStatus") && fbdo.dataType() == "int") {
+    solarStatus = fbdo.intData();
+}
 
   if (currentTime >= startHour * 3600 + startMinute * 60 && currentTime <= endHour * 3600 + endMinute * 60) {
     digitalWrite(LED, HIGH);
@@ -254,8 +253,14 @@ void schedule() {
   else {
     digitalWrite(LED, LOW);
   }
-}
 
+ if (solarStatus==1) {
+    digitalWrite(LED, HIGH);
+  }
+  else {
+    digitalWrite(LED, LOW);
+  }
+}
 void oledisplay()
 {
   display.clearDisplay();
@@ -276,15 +281,11 @@ void oledisplay()
   display.print(switchOn ? "ON" : "OFF");
   display.display();
 }
-
-
 void firebase() {
    unsigned long currentMillis = millis();
-
   if (currentMillis - sendDataPrevMillis >= 10000)
   {
     sendDataPrevMillis = currentMillis;
-
     // Send data to Firebase
     Firebase.RTDB.setFloat(&fbdo, "/power1", power);
     Firebase.RTDB.setFloat(&fbdo, "/voltage1", voltage);
@@ -295,8 +296,6 @@ void firebase() {
     Firebase.RTDB.setInt(&fbdo, "/pirStatus1", pirState);
   }
 }
-
-
 float generateRandomValue(float minVal, float maxVal) {
   return random(minVal * 100, maxVal * 100) / 100.0;
 }
